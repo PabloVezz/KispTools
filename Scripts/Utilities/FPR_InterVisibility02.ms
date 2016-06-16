@@ -4,24 +4,22 @@ category:"Matanga"
 	--All selected views to process
 	local theViews=#()
 
-	--List of arrays of 2 nodes
-	local allConnections=#()
-
 	--This Array will hold all valid Links
 	local validLinks=#()	
 	local allFPRLinks =#()
-
+	
 	local validConnections  = undefined
 
 	--The obstacles between the currently selected nodes
-	local drawLine =false
 	local debugLine  = undefined
+	local currentObstacle=undefined
+	local oldSystemType= undefined
 
 
 	--The Rollouts References
 	local RLTSelectViews = undefined
 	local RLTViewsConfig = undefined
-	local RLTWorldSpaceLinksDebug = undefined
+	local RLTDebugViewsConnection = undefined
 	local RLTScreenSpaceDebug = undefined
 	local RLTExport = undefined
 	local AddScreenSpaceLink = undefined
@@ -37,10 +35,14 @@ category:"Matanga"
 
 	--PRE DEFINED METHODS
 	global PrintCameraRotation()		--This one is global because it is used by a callback
-	local UpdateWorldSpaceOptions()
 	local GetRelativePosCoord()
 	local GetScreenCoord()
 	local CreateViewLinkDebugRollout()
+	local GetRayIntersectResults()
+	local GetIsOcluded()
+	local StoreSystemUnit()
+	local RestoreSystemUnit()
+	local GetRoundedVector3()
 --------------------------------------------
 --STRUCTS
 --STRUCTS
@@ -59,6 +61,10 @@ category:"Matanga"
 		--Screen Space Variables
 		myCoords=undefined,		--When the coord
 		
+		myDir=undefined,
+		myDist=undefined,
+	
+		linkedFPRName=undefined,
 		
 		--LINK OPTIONS
 		vreUrl=undefined,		--URL of the vre u
@@ -92,16 +98,32 @@ category:"Matanga"
 		free allFPRLinks		
 		
 		for o in validLinks do
-		(			
+		(	
+			--Create new link, name it and configure it
 			newFPR = FPRLink()			
 			newFPR.myType= "FPR Link"			
-			newFPR.myViewName= o[1].name			
+			newFPR.myViewName= o[1].name	
+			newFPR.linkedFPRName= o[2].name
 			newFPR.myCoordSys = coordSyst
 			
+			--Get the actual coordinate based on the selected method  appropiate 
+			--There can be 2 modes WORLD and SCREEN. Both are represented by a Vector·
+			--In the WORLD configuration the vector represents the position of the second object of the 
+			--array using the first object as an origin. 
 			
-			if(coordSyst== "world") do newFPR.myCoords= GetRelativePosCoord o
+			--if(coordSyst== "world") do 
+			newFPR.myCoords= GetRelativePosCoord o
 			
-			if(coordSyst=="screen") do newFPR.myCoords="w"
+			--In the SCREEN configuration the X and Y axes are angles that  give a coordinate in a 3d Sphere
+			-- the Z axis is used to store the distance at which the second object is from the first object.	
+			
+			--if(coordSyst=="screen") do
+			--(			
+				newFPR.myDir= normalize(o[2].pos-o[1].pos)
+				StoreSystemUnit()
+				newFPR.myDist= (dotnetclass "System.decimal").Round(distance o[1] o[2])
+				RestoreSystemUnit()
+			--)
 			
 			append allFPRLinks newFPR
 		)
@@ -123,7 +145,7 @@ category:"Matanga"
 	-------------------------------------------------------------
 	--Working XML Exporter Test Method
 	---------------------------------------------
-		function ExportWorld =
+		function ExportViewLinks =
 		(
 			clearListener()
 
@@ -137,13 +159,49 @@ category:"Matanga"
 			rNode.AddAttribute "Name" "theName" --Add Attribute
 
 			
-			print theViews.count
+			--First Create all the Different Views
+			theViewNodes=#()
 			for o in theViews do
 			(
-				viewNode = xDoc.getNewNode "FPR" --Get a new Node
-				viewNode.AddAttribute "Name" (o.name)
-				rNode.AppendNode newNode --Append a new Node
-				
+				theViewNode = xDoc.getNewNode "FPR" --Get a new Node
+				theViewNode.AddAttribute "Name" (o.name)
+				rNode.AppendNode theViewNode --Append a new Node				
+				append theViewNodes theViewNode
+			)
+			
+			for theLink in allFPRLinks do
+			(
+				for xmlViewNode in theViewNodes do
+				(
+					--Encontramos el nodo que corresponde a este link
+					found=false
+					if(found ==false and theLink.myViewName== xmlViewNode.GetAttribute "Name")do
+					(
+						found=true
+
+						theLinkNode = xDoc.getNewNode "FPRLink" --Get a new Node
+						xmlViewNode.AppendNode theLinkNode --Append a new Node
+						
+						linkedFPRNode= xDoc.getNewNode "LinkedFPR"
+						linkedFPRNode.AddAttribute "Name" (theLink.linkedFPRName)
+						linkedFPRNode.AddAttribute "URL" "???"
+						theLinkNode.AppendNode linkedFPRNode --Append a new Node						
+						
+						theDirNode= xDoc.getNewNode "ScreenCoordinates"
+						theDirNode.AddAttribute "X" (theLink.myDir.x as string)
+						theDirNode.AddAttribute "Y" (theLink.myDir.y as string)
+						theDirNode.AddAttribute "Z" (theLink.myDir.z as string)
+						theDirNode.AddAttribute "Distance" (theLink.myDist as string)
+						theLinkNode.AppendNode theDirNode --Append a new Node
+
+						worldCoordNode= xDoc.getNewNode "WorldCoordinates"
+						worldCoordNode.AddAttribute "X" (theLink.myCoords.x as string)
+						worldCoordNode.AddAttribute "Y" (theLink.myCoords.y as string)
+						worldCoordNode.AddAttribute "Z" (theLink.myCoords.z as string)						
+						theLinkNode.AppendNode worldCoordNode --Append a new Node	
+					)
+				)
+				/*
 				posNode = XDoc.getNewNode  "WorldPos"
 				viewNode.AppendNode posNode
 				posNode.SetText (o.pos as string)
@@ -158,10 +216,9 @@ category:"Matanga"
 				urlLinkNode.AddAttribute "VRE_URL" "theUrl" --Add Attribute
 				urlLinkNode.AddAttribute "FPR_URL" "theUrl" --Add Attribute			
 				viewNode.AppendNode urlLinkNode
-
-				
 				
 				rNode.AppendNode viewNode
+				*/				
 			)
 
 			xDoc.SaveXML() --Save XML
@@ -198,21 +255,46 @@ category:"Matanga"
 			
 			
 			viewport.setCamera theHelperCamera
-		)
-		
+		)		
 	--------------------------------
 	--Draw A Debug Spline shape
 	---------------------------------
 		fn DebugDrawLineBetweenTwoPoints pointA pointB =
 		(
 			if(debugLine!= undefined) do delete debugLine
-			debugLine = SplineShape pos:pointA
+			debugLine = SplineShape pos:pointA.pos
 			debugLine.wirecolor= red
 			addNewSpline debugLine
-			addKnot debugLine 1 #corner #line PointA
-			addKnot debugLine 1 #corner #line PointB
+			addKnot debugLine 1 #corner #line PointA.pos
+			addKnot debugLine 1 #corner #line PointB.pos
 			updateShape debugLine
 		)	
+	----------------------------------------------------------
+	--Debugs the obstacles  between views
+	----------------------------------------------------------
+		function DebugViewConnection theLinks =
+		(
+			if(RLTDebugViewsConnection.cbDebugLine.state==true) do DebugDrawLineBetweenTwoPoints theLinks[1] theLinks[2]
+			--This variable will store the reference to the obstacle if one exists
+			theObstacle=undefined
+			--Get a list of all objects that are in the path of the ray that we get based on the positions of this two nodes
+			theIntersects= GetRayIntersectResults theLinks
+			--If there are any objects on the Array	
+			if( theIntersects.count!=0) do
+			(
+				theObstacle=GetIsOcluded theIntersects theLinks
+			)
+			if(theObstacle!=undefined) then
+			(
+				currentObstacle=theObstacle
+				RLTDebugViewsConnection.btnSelectFirstObstacle.text=currentObstacle.name
+			)
+			else
+			(
+				currentObstacle=undefined
+				RLTDebugViewsConnection.btnSelectFirstObstacle.text=""
+			)
+		)
 ----------------
 --MAIN
 --MAIN
@@ -329,7 +411,24 @@ category:"Matanga"
 			)
 			print ("there are a total of "+validLinks.count as string +" valid links.")
 			for o in validLinks do print (o[1].name +"--"+o[2].name)
-		)		
+		)
+	-----------------------------------------------------------------------------------------
+	--REVIEW this method straightens the inclination of an object
+	-----------------------------------------------------------------------------------------
+		function GetCorrectedDir =
+		(
+			theObj=$
+			newObj=Box()
+			newObj.pos=theObj.pos
+			newObj.dir=theObj.dir
+			print theobj.dir
+			oldDir=theObj.dir
+			oldDir.z=0
+			newObj.dir=oldDir
+
+			$.rotation as eulerangles
+
+		)
 --------------------------------------------
 --UI
 --UI
@@ -340,14 +439,13 @@ category:"Matanga"
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------
 	--Method that is attached to the ChangeViewport Callback. Is used to update the Create ScreenSpace Link Rollout
 	----------------------------------------------------------------------------------------------------------------------------------------------------------------------
-
 		function PrintCameraRotation =
 		(
 			theRotation=theHelperCamera.transform.rotation as EulerAngles
 			AddScreenSpaceLink.lblEulerX.text ="X: "+ theRotation.x as string 
 			AddScreenSpaceLink.lblEulerY.text ="Y: 0 "
 			AddScreenSpaceLink.lblEulerZ.text ="Z: "+ theRotation.z as string 
-		)		
+		)
 	------------------------------------------------------------------------------------------------------------------------------
 	--Updates the ScreenSpace Link Configuration Rollout  
 	------------------------------------------------------------------------------------------------------------------------------
@@ -355,26 +453,18 @@ category:"Matanga"
 		(
 			RLTScreenSpaceDebug.ddScreenSpaceAllViews.items=for o in theViews collect o.name
 			RLTScreenSpaceDebug.ddScreenSpaceAllViews.selection =0
-		)		
-	------------------------------------------------------------------------------------------------------------------------------
-	--Updates the World Space Debug Rollout
-	------------------------------------------------------------------------------------------------------------------------------
-		function UpdateWorldSpaceOptions theObstacles =
-		(
-			RLTWorldSpaceLinksDebug.obstacles.items= for x in theObstacles collect x.name
-		)	
+		)
 	-------------------------------------------
 	-- When FPR Links are calculated this method is in charge of initializing the Subrollout that debugs worldSpace links
 	-------------------------------------------
 		function EnableWorldSpaceDebug =
 		(
-				RLTWorldSpaceLinksDebug.fromNode.enabled=true
-				RLTWorldSpaceLinksDebug.toNode.enabled=true
-				RLTWorldSpaceLinksDebug.obstacles.enabled=true
-				RLTWorldSpaceLinksDebug.fromNode.items=( for o in theViews collect o.name)
-				RLTWorldSpaceLinksDebug.fromNode.selection=0
-				RLTWorldSpaceLinksDebug.toNode.items=( for o in theViews collect o.name)
-				RLTWorldSpaceLinksDebug.toNode.selection=0
+				RLTDebugViewsConnection.fromNode.enabled=true
+				RLTDebugViewsConnection.toNode.enabled=true
+				RLTDebugViewsConnection.fromNode.items=( for o in theViews collect o.name)
+				RLTDebugViewsConnection.fromNode.selection=0
+				RLTDebugViewsConnection.toNode.items=( for o in theViews collect o.name)
+				RLTDebugViewsConnection.toNode.selection=0
 		)
 	------------------------------------------------
 	-- Rollout to examine View Links
@@ -400,12 +490,43 @@ category:"Matanga"
 		function GetRoundedVector3 theVector =
 		(
 			newVector= [0.0,0.0,0.0]
-			newVector.x = floor(10 * theVector.x) / 10
-			newVector.y = floor(10 * theVector.y) / 10
-			newVector.z = floor(10 * theVector.z) / 10
+			DDMath=dotnetclass "System.decimal"			
+			newVector.x = DDMath.Round(theVector.x)
+			newVector.y = DDMath.Round(theVector.y) 
+			newVector.z = DDMath.Round(theVector.z)
 			newVector
-		)		
-	
+		)
+		function RoundFloat val dp =
+		(
+			a = val * (10^dp)
+			b = a as integer
+			a = b as float / (10^dp)
+			return a
+		)
+	------------------------------------------------------------------------------------------------------------------------------------------------------
+	--Method that returns an array consisiting of the normalized  direction vector from object 1 to object 2
+	-- and the distance between this two points
+	------------------------------------------------------------------------------------------------------------------------------------------------------
+		fn GetViewsDirDist v1 v2 =
+		(
+			theDir=v2.pos-v1.pos
+			theDir = normalize theDir
+			theDist=distance v1 v2
+			#(theDir,theDist)
+		)
+		
+		
+		
+		function StoreSystemUnit =
+		(
+			oldSystemType=	units.SystemType
+			units.SystemType =#centimeters
+		)
+		function RestoreSystemUnit =
+		(
+			units.SystemType=oldSystemType
+		)
+
 ----------------------------
 -- ROLLOUTS
 -- ROLLOUTS
@@ -438,7 +559,8 @@ category:"Matanga"
 			on pckbtnSingle picked val do
 			(
 				appendIfUnique theViews val
-				objectsToView.items=( for o in theViews collect o.name)
+				
+				RLTSelectViews.objectsToView.items=( for o in theViews collect o.name)
 				UpdateScreenSpaceOptions()
 			)
 			on pckbtnMultipleObject pressed do
@@ -462,9 +584,9 @@ category:"Matanga"
 			on btnAddAllCams pressed do
 			(
 				--print Cameras.count
-				for o in Cameras where classof o != TargetObject do append theViews o
-				objectsToView.items=( for o in theViews collect o.name)
-				--Refresh the ScreenSpace options List
+				for o in Cameras where classof o != TargetObject do appendIfUnique theViews o
+				
+				RLTSelectViews.objectsToView.items=( for o in theViews collect o.name)
 				UpdateScreenSpaceOptions()
 			)
 			on btnRemoveSelected pressed do
@@ -475,8 +597,9 @@ category:"Matanga"
 				newArray= for o in theSelection collect theViews[o]
 				--Delete items from the main Node Arrays
 				for o in newArray do deleteItem theViews (findItem theViews o)
+				
 				--Update the MultiListView
-				objectsToView.items=( for o in theViews collect o.name)
+				RLTSelectViews.objectsToView.items=( for o in theViews collect o.name)
 				--Refresh the ScreenSpace options List
 				UpdateScreenSpaceOptions()
 			)
@@ -515,7 +638,7 @@ category:"Matanga"
 	------------------------------------------------
 		rollout RLTExport "Step 3 - Review / Export"
 		(
-			Label lblvalidLinks "There are X valid links" offset:[0,10]			
+			Label lblvalidLinks "There are X valid links" offset:[0,5]			
 			
 			dropdownlist  ddlAllConnections "Select Links"  selection:0
 			
@@ -531,11 +654,17 @@ category:"Matanga"
 			label lblFPRCoordsText 	"Coords.:"	align:#left	offset:[0,0] across:2
 			label lblFPRCoords 		""		align:#left	offset:[-50,0]
 			
+			label lblmyDirText "Direction:"  align:#left	offset:[0,0] across:2
+			label lblmyDir 		""			align:#left	offset:[-40,0]
+			
+			label lblmyDistText "Distance:"  align:#left	offset:[0,0] across:2
+			label lblmyDist 		""			align:#left	offset:[-40,0]
+			
 			label lblSpacing ""
 			
-			groupbox gbxFPRInfo "FPR Link Info" width:215 height:95 pos:[5,80]
+			groupbox gbxFPRInfo "FPR Link Info" width:215 height:130 pos:[5,75]
 			
-			button btnExportUnified "Export " 	width:85 height:35 offset:[5,10] across:2
+			button btnExportUnified "Export " 	width:150 height:40 offset:[0,5]
 
 			on ddlAllConnections selected val do
 			(
@@ -544,35 +673,44 @@ category:"Matanga"
 				lblFPRType.text= allFPRLinks[val].myType
 				lblFPRCoordSys.text= allFPRLinks[val].myCoordSys
 				lblFPRCoords.text= allFPRLinks[val].myCoords as string
-			)
-			
+				lblmyDir.text= allFPRLinks[val].myDir as string
+				lblmyDist.text= allFPRLinks[val].myDist as string
+			)			
 			on btnExportUnified pressed do
 			(
-				ExportWorld()
+				ExportViewLinks()
 			)	
 				
 		)
 	---------------------------------------------------------------------------------------------------------------
 	--Rollout with the results of the visibility we calculated, mostly used to debug
 	---------------------------------------------------------------------------------------------------------------
-		rollout RLTWorldSpaceLinksDebug "Debug WorldSpace Links"
+		rollout RLTDebugViewsConnection "Debug Views Connections"
 		(
 			checkBox cbDebugLine "Draw Debug Line" align:#left
 			listbox fromNode "From View" enabled:false width:100 height:5 across:2
 			listbox toNode "To View" enabled:false width:100 height:5
 
-			listbox obstacles "Obstacles" enabled:false height:5
+			label lblSpc "" 
 
-			button btnSelectGroup "Select Combo" enabled:false
+			label lblFirstObstText "First Obstacle:" across:2 align:#left
+			
+			button btnSelectFirstObstacle ""  width:130 offset:[-15,-3] tooltip:"Select first obstacle "
 
-			on cbDebugLine changed val do drawLine=val
-
+			on cbDebugLine changed val do
+			(
+				if (val ==True) do
+				(
+					if(toNode.selection != 0 and fromNode.selection != 0) do 
+						DebugDrawLineBetweenTwoPoints theViews[fromNode.selection] theViews[toNode.selection]
+				)
+			)			
 			on fromNode selected val do
 			(
 				--print ("fromNode selected "+ val as string )
 				if(toNode.selection != 0) do
 				(
-					DebugConnection theViews[fromNode.selection] theViews[toNode.selection]
+					DebugViewConnection (#(theViews[fromNode.selection],theViews[toNode.selection]))
 				)
 			)
 			on toNode selected val do
@@ -580,8 +718,20 @@ category:"Matanga"
 				--print ("toNode selected "+ val as string )
 				if(fromNode.selection != 0) do
 				(
-					DebugConnection theViews[fromNode.selection] theViews[toNode.selection]
+					DebugViewConnection (#(theViews[fromNode.selection],theViews[toNode.selection]))
 				)
+			)
+			on fromNode doubleClicked val do 
+			(
+				select theViews[val]
+			)
+			on toNode doubleClicked val do 
+			(
+				select theViews[val]
+			)			
+			on btnSelectFirstObstacle pressed do 
+			(
+				if (currentObstacle != undefined) do try(select currentObstacle)catch()
 			)
 
 		)	
@@ -672,11 +822,11 @@ category:"Matanga"
 		AddSubRollout RLTMainRollout.SRLTChooseViews RLTViewsConfig
 		AddSubRollout RLTMainRollout.SRLTChooseViews RLTExport
 		
-		AddSubRollout RLTMainRollout.SRLTChooseViews RLTWorldSpaceLinksDebug
+		AddSubRollout RLTMainRollout.SRLTChooseViews RLTDebugViewsConnection
 		AddSubRollout RLTMainRollout.SRLTChooseViews RLTScreenSpaceDebug
 
 		RLTMainRollout.SRLTChooseViews.height += 625
-		RLTMainRollout.SRLTChooseViews.RLTWorldSpaceLinksDebug.open=false
+		RLTMainRollout.SRLTChooseViews.RLTDebugViewsConnection.open=false
 		RLTMainRollout.SRLTChooseViews.RLTScreenSpaceDebug.open=false
 	)
 )
